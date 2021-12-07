@@ -15,10 +15,19 @@
 
 #include <iostream>
 #include <cmath>
+#include <iomanip>
+#include <cstdlib>
+#include <vector>
+#include <utility>
 
 #include "Camera.h"
 #include "Shader.h"
 #include "Model.h"
+#include "AbstractProjectionFactory.h"
+#include "PerspectiveOnePointFactory.h"
+#include "OrthogonalProjection.h"
+#include "ObliqueProjection.h"
+#include "PerspectiveProjection.h"
 
 
 //  Callback Functions
@@ -42,30 +51,30 @@ float last_y = float(HEIGHT) / 2.0;
 //  Camera
 Camera* camera = nullptr;
 
+//  parameters for projections
+float left = -10.0f, right = 10.0f;
+float bottom = -10.0f, top = 10.0f;
+float near = 1.0f, far = 100.0f;
 
-//  Temp function
-glm::mat4 getMatrix(const float& alpha, const float& beta) {
-    glm::mat4 m1(1.0f);
-    glm::mat4 m2(1.0f);
+//  container to store objects
+typedef std::pair<game::Model, glm::vec4> pr;
+std::vector<pr> objects;
 
-    float cos_alpha = cos(glm::radians(alpha));
-    float sin_alpha = sin(glm::radians(alpha));
 
-    float cos_beta = cos(glm::radians(beta));
-    float sin_beta = sin(glm::radians(beta));
+//  Projection matrix factory
+AbstractProjectionFactory* projection_factory = nullptr;
 
-     m1[1][1] = cos_alpha;
-     m1[1][2] = sin_alpha;
-     m1[2][1] = -sin_alpha;
-     m1[2][2] = cos_alpha;
-
-     m2[0][0] = cos_beta;
-     m2[0][2] = -sin_beta;
-     m2[2][0] = sin_beta;
-     m2[2][2] = cos_beta;
-
-     return m1 * m2;
+void printMat(const glm::mat4& m) {
+    std::cout << std::fixed << std::setprecision(6);
+    for (unsigned i = 0; i < 4; ++i) {
+        for (unsigned j = 0; j < 4; ++j) {
+            std::cout << m[j][i] << " ";
+        }
+        std::cout << "\n";
+    }
+    std::cout << "\n";
 }
+
 
 /*************************************************************
 ***   MAIN   *************************************************
@@ -111,11 +120,32 @@ int main() {
     camera->setYaw(90.0f);
 
 
-    //  Model
-    game::Model tree;
-    tree.init("objects/tree1/tree1.obj");
+    //  Initialize shader
+    //  We will just use one simple shader for this application
     game::Shader shader;
     shader.init("shaders/object.vs", "shaders/object.fs");
+
+    //  Initialize game objects;
+    game::Model tree;
+    tree.init("objects/PenroseTriangle/PenroseTriangle.obj");
+    pr p;
+    p.first = tree;
+    p.second = glm::vec4(0.2f, 1.0f, 0.2f, 1.0f);
+
+    //  push into vector
+    objects.push_back(p);
+
+
+    shader.use();
+    glUniform4f(glGetUniformLocation(shader.id(), "color"), 0.7f, 0.5f, 0.3f, 1.0f);
+
+    //  Set Projection Matrix
+    projection_factory = new PerspectiveOnePointFactory(45.0f, 1.0f, near, far);
+
+    //  Output matrix info
+    projection_factory->print();
+    printMat(projection_factory->createProjection());
+
 
     /*********** MAIN LOOP  ***********************/
     while (!glfwWindowShouldClose(window)) {
@@ -134,13 +164,14 @@ int main() {
         //  Set View Matrix
         auto view = glm::lookAt(camera->pos(), camera->pos() + camera->dir(), camera->up());
 
-        //  Set Projection Matrix
-        auto projection = glm::perspective(glm::radians(45.0f), float(WIDTH) / float(HEIGHT), 0.1f, 100.0f);
-        //auto projection = getMatrix(45.0f, 45.0f);
+        //  Get projection matrix
+        auto projection = projection_factory->createProjection();
+
 
         //  Set Model Matrix (Identity Matrix)
         auto model = glm::mat4(1.0f);
 
+        model = glm::scale(model, glm::vec3(0.5f, 0.5f, 0.5f));
 
         //  Need to set shader to current shader'
         shader.use();
@@ -150,6 +181,7 @@ int main() {
         glUniformMatrix4fv(glGetUniformLocation(shader.id(), "view"), 1, GL_FALSE, glm::value_ptr(view));
         glUniformMatrix4fv(glGetUniformLocation(shader.id(), "projection"), 1, GL_FALSE, glm::value_ptr(projection));
         glUniformMatrix4fv(glGetUniformLocation(shader.id(), "model"), 1, GL_FALSE, glm::value_ptr(model));
+
 
 
         tree.draw(shader);
@@ -168,6 +200,7 @@ int main() {
     //  Deallocate memory
     tree.destroyModel();
     delete camera;
+    delete projection_factory;
 
     glfwTerminate();
     return 0;
@@ -210,7 +243,7 @@ void input(GLFWwindow* window) {
         glfwSetWindowShouldClose(window, true);
     }
     //  set speed
-    float speed = delta_time * 2.0;
+    float speed = delta_time * 3.0;
 
     //  Get the up and direction vectors
     glm::vec3 direction = glm::vec3(camera->dir().x, 0.0f, camera->dir().z);
@@ -236,6 +269,72 @@ void input(GLFWwindow* window) {
     }
     if (glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS) {
         output_vector -= glm::vec3(0.0f, speed, 0.0f);
+    }
+
+    //  checks if we changed matrices
+    static bool matrix_changed = false;
+
+    static bool one_pressed = false;
+    if (glfwGetKey(window, GLFW_KEY_1) == GLFW_PRESS && !one_pressed) {
+        if (projection_factory != nullptr) {
+            delete projection_factory;
+            projection_factory =
+                new PerspectiveOnePointFactory(45.0f, float(WIDTH) / float(HEIGHT), near, far);
+            matrix_changed = true;
+        }
+        one_pressed = true;
+    }
+    if (glfwGetKey(window, GLFW_KEY_1) == GLFW_RELEASE && one_pressed) {
+        one_pressed = false;
+    }
+
+    static bool two_pressed = false;
+        if (glfwGetKey(window, GLFW_KEY_2) == GLFW_PRESS && !two_pressed) {
+        if (projection_factory != nullptr) {
+            delete projection_factory;
+            projection_factory =  new OrthogonalProjection(left, right, bottom, top, near, far);
+            matrix_changed = true;
+        }
+        two_pressed = true;
+    }
+    if (glfwGetKey(window, GLFW_KEY_2) == GLFW_RELEASE && two_pressed) {
+        two_pressed = false;
+    }
+
+    static bool three_pressed = false;
+    if (glfwGetKey(window, GLFW_KEY_3) == GLFW_PRESS && !three_pressed) {
+        if (projection_factory != nullptr) {
+            delete projection_factory;
+            projection_factory =  new ObliqueProjection(left, right, bottom, top, near, far, 30.0f, 42.0f);
+            matrix_changed = true;
+        }
+        three_pressed = true;
+    }
+    if (glfwGetKey(window, GLFW_KEY_3) == GLFW_RELEASE && three_pressed) {
+        three_pressed = false;
+    }
+
+    //  Take care of possible new output stream
+    if (matrix_changed) {
+        //  Clear the output stream and print the new matrix info
+        system("clear");
+        projection_factory->print();
+        printMat(projection_factory->createProjection());
+        matrix_changed = false;
+    }
+
+    static bool p_pressed = false;
+    static bool paused = false;
+    if (glfwGetKey(window, GLFW_KEY_P) == GLFW_PRESS && !p_pressed) {
+        if (!paused) {
+            glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+        } else {
+            glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+        }
+        p_pressed = true;
+    }
+    if (glfwGetKey(window, GLFW_KEY_P) == GLFW_RELEASE && p_pressed) {
+        p_pressed = false;
     }
 
     //  Update the camera position
